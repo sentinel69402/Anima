@@ -10,6 +10,21 @@ local function dramaticCurve(x: number): number
     return x * x * x * (x * (x * 6 - 15) + 10)
 end
 
+--[[
+Creates a new BlendController for managing 1D animation blending
+@param handler Anima The parent animation handler
+@param profile BlendProfile The configuration for blending nodes
+@return BlendController
+```lua
+local blender = BlendController.new(anima, {
+    nodes = {
+        {name = "Idle", min = 0, max = 0},
+        {name = "Walk", min = 5, max = 15},
+        {name = "Run", min = 20, max = 50}
+    }
+})
+```
+]]
 function BlendController.new(handler: Types.Anima, profile: Types.BlendProfile): Types.BlendController
     local self = setmetatable({}, BlendController)
 
@@ -17,8 +32,8 @@ function BlendController.new(handler: Types.Anima, profile: Types.BlendProfile):
     self._nodes = profile.nodes
     self._alive = true
 
-    -- Sort nodes by their center point for consistent blending
     self._sortedNodes = table.clone(self._nodes)
+    
     table.sort(self._sortedNodes, function(a, b)
         return (a.min + a.max) / 2 < (b.min + b.max) / 2
     end)
@@ -36,6 +51,13 @@ function BlendController.new(handler: Types.Anima, profile: Types.BlendProfile):
     return self
 end
 
+--[[
+Updates the blend weights based on a target value
+@param value number The value to blend for (e.g. current speed)
+```lua
+blender:Update(humanoid.MoveDirection.Magnitude * 16)
+```
+]]
 function BlendController:Update(value: number)
     if not self._alive then
         return
@@ -84,6 +106,9 @@ function BlendController:Update(value: number)
     end
 end
 
+--[[
+Cleans up the BlendController and stops its animations
+]]
 function BlendController:Destroy()
     self._alive = false
 

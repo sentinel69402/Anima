@@ -3,6 +3,24 @@ StateMachine.__index = StateMachine
 
 local Types = require(script.Parent.Types)
 
+--[[
+Creates a new StateMachine instance
+@param config StateMachineConfig The configuration for the state machine
+@return StateMachine
+```lua
+local machine = StateMachine.new({
+    initial = "Idle",
+    states = {
+        Idle = {
+            onEnter = function() anima:PlayAnimation("Idle") end,
+            transitions = {
+                Walking = function(ctx) return ctx.speed > 0 end
+            }
+        }
+    }
+})
+```
+]]
 function StateMachine.new(config: Types.StateMachineConfig): Types.StateMachine
     assert(config.initial, "StateMachine requires an initial state")
 
@@ -21,6 +39,11 @@ function StateMachine.new(config: Types.StateMachineConfig): Types.StateMachine
     return self
 end
 
+--[[
+Adds a new state to the machine
+@param name string The name of the state
+@param state State The state configuration
+]]
 function StateMachine:AddState(name: string, state: Types.State)
     self._states[name] = state
 
@@ -29,10 +52,18 @@ function StateMachine:AddState(name: string, state: Types.State)
     end
 end
 
+--[[
+Gets the current state name
+@return string
+]]
 function StateMachine:GetState(): string
     return self._current
 end
 
+--[[
+Transitions to a specific state
+@param name string The name of the state to transition to
+]]
 function StateMachine:SetState(name: string)
     if self._current == name then
         return
@@ -56,10 +87,17 @@ function StateMachine:SetState(name: string)
     end
 end
 
+--[[
+Locks the state machine for a duration, preventing transitions
+@param duration number How long to lock the machine in seconds
+]]
 function StateMachine:Lock(duration: number)
     self._lockedUntil = os.clock() + duration
 end
 
+--[[
+Updates the state machine and checks for transitions
+]]
 function StateMachine:Update()
     local now = os.clock()
     if now < self._lockedUntil then
