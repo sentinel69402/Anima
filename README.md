@@ -40,9 +40,10 @@ Anima approach is different:
 - **1D Blend Controllers**: Smoothly interpolate between states like Idle, Walk, and Run based on a single value (usually speed).
 - **Optional State Machine**: A simple way to manage high-level intent (e.g., "Is the character jumping?") without mixing it into your physics code.
 - **Folder-Based**: No manual configuration. Point it at a folder and it finds everything for you.
-- **NPC Support**: Works out of the box for NPCs by passing the Model instead of a Player.
+- **NPC & Custom Rig Support**: Works out of the box for NPCs or non-humanoid models using either a `Humanoid` or an `AnimationController`.
 - **Singleton Pattern**: Automatically manages and returns a single instance per Player, preventing duplicated logic.
 - **Animate Conflict Handling**: Anima can automatically disable Roblox’s default "Animate" script so it doesn't fight your custom system.
+- **Well Documented**: Clear internal comments and a clean API designed for a better developer experience.
 
 ---
 
@@ -139,7 +140,7 @@ The `examples/` folder contains focused scripts for specific use cases:
 4. **Locomotion Blending**: Smoothly handling movement speed transitions.
 5. **Composition**: Using states and blending together.
 6. **Overlays**: Layering actions (like punching) over movement using priorities.
-7. **NPC Support**: Operating Anima on non-player characters.
+7. **NPC Support**: Operating Anima on non-player characters and `AnimationController` rigs.
 
 ---
 
@@ -175,7 +176,8 @@ type State = {
 
 - `Anima.new(source, subject, debug?, disableAnimate?)` -> `Anima`
   - `source` can be a **Folder** or a **Table** (`{[string]: number | string}`).
-  - `subject` can be a **Player** or a **Model** (NPC).
+  - `subject` can be a **Player** or a **Model** (NPC/Custom Rig).
+  - Automatically detects and utilizes a **Humanoid** or **AnimationController** within the model.
   - If a Player is provided, it returns a singleton instance.
 - `:LoadAnimations()` - Manually re-scan the animation folder.
 - `:Cache()` - Reloads character animator and tracks (call this on respawn).
