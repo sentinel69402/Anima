@@ -1,3 +1,9 @@
+--[[
+    BlendController
+    Manages 1D animation blending based on a weight value.
+    Smoothly transitions between multiple animations defined in a BlendProfile.
+]]
+
 local BlendController = {}
 BlendController.__index = BlendController
 
@@ -5,25 +11,29 @@ local Types = require(script.Parent.Types)
 
 local clamp = math.clamp
 
+--[[
+    Applies a smooth cubic curve to the input value for more natural blending
+    @param x number Input value (0-1)
+    @return number Output value (0-1)
+]]
 local function dramaticCurve(x: number): number
-    -- Smootherstep: 6x^5 - 15x^4 + 10x^3
     return x * x * x * (x * (x * 6 - 15) + 10)
 end
 
 --[[
-Creates a new BlendController for managing 1D animation blending
-@param handler Anima The parent animation handler
-@param profile BlendProfile The configuration for blending nodes
-@return BlendController
-```lua
-local blender = BlendController.new(anima, {
-    nodes = {
-        {name = "Idle", min = 0, max = 0},
-        {name = "Walk", min = 5, max = 15},
-        {name = "Run", min = 20, max = 50}
-    }
-})
-```
+    Creates a new BlendController instance
+    @param handler Anima The Anima handler instance
+    @param profile BlendProfile The profile defining animations and their ranges
+    @return BlendController
+    ```lua
+    local blend = BlendController.new(anima, {
+        nodes = {
+            {name = "Idle", min = 0, max = 0},
+            {name = "Walk", min = 5, max = 15},
+            {name = "Run", min = 20, max = 50}
+        }
+    })
+    ```
 ]]
 function BlendController.new(handler: Types.Anima, profile: Types.BlendProfile): Types.BlendController
     local self = setmetatable({}, BlendController)
@@ -33,7 +43,6 @@ function BlendController.new(handler: Types.Anima, profile: Types.BlendProfile):
     self._alive = true
 
     self._sortedNodes = table.clone(self._nodes)
-    
     table.sort(self._sortedNodes, function(a, b)
         return (a.min + a.max) / 2 < (b.min + b.max) / 2
     end)
@@ -52,11 +61,11 @@ function BlendController.new(handler: Types.Anima, profile: Types.BlendProfile):
 end
 
 --[[
-Updates the blend weights based on a target value
-@param value number The value to blend for (e.g. current speed)
-```lua
-blender:Update(humanoid.MoveDirection.Magnitude * 16)
-```
+    Updates the weights of the animations based on the provided value
+    @param value number The value to blend by (e.g. current movement speed)
+    ```lua
+    blend:Update(humanoid.MoveDirection.Magnitude * 16)
+    ```
 ]]
 function BlendController:Update(value: number)
     if not self._alive then
@@ -107,7 +116,7 @@ function BlendController:Update(value: number)
 end
 
 --[[
-Cleans up the BlendController and stops its animations
+    Cleans up the BlendController and stops its animations
 ]]
 function BlendController:Destroy()
     self._alive = false

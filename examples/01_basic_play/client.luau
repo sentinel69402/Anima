@@ -21,6 +21,15 @@ local anims = ReplicatedStorage:WaitForChild("Anims")
 local anima = Anima.new(anims, player)
 
 --[[
+    Listen for animation starts
+    The signal now provides (name, player, character)
+]]
+anima:getPlaySignal():Connect(function(name, player, character)
+    local identity = player and player.Name or character.Name
+    print(`{identity} started playing: {name}`)
+end)
+
+--[[
     Configure playback parameters
     Setting 'loop' to true will make the animation repeat until stopped.
 ]]

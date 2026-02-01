@@ -40,6 +40,8 @@ Anima approach is different:
 - **1D Blend Controllers**: Smoothly interpolate between states like Idle, Walk, and Run based on a single value (usually speed).
 - **Optional State Machine**: A simple way to manage high-level intent (e.g., "Is the character jumping?") without mixing it into your physics code.
 - **Folder-Based**: No manual configuration. Point it at a folder and it finds everything for you.
+- **NPC Support**: Works out of the box for NPCs by passing the Model instead of a Player.
+- **Singleton Pattern**: Automatically manages and returns a single instance per Player, preventing duplicated logic.
 - **Animate Conflict Handling**: Anima can automatically disable Roblox’s default "Animate" script so it doesn't fight your custom system.
 
 ---
@@ -62,10 +64,10 @@ Anima handles how the animations look and transition, but it doesn't decide how 
 ```lua
 local Anima = require(game.ReplicatedStorage.Anima)
 
--- (folder, player, debug?, disableAnimate?)
+-- (folder, subject [Player or NPC Model], debug?, disableAnimate?)
 local anima = Anima.new(
     game.ReplicatedStorage.anims,
-    game.Players.LocalPlayer,
+    game.Players.LocalPlayer, -- Or workspace.NPC
     false,
     true
 )
@@ -74,6 +76,12 @@ anima:PlayAnimation("Idle", {
     loop = true,
     fadeTime = 0.2
 })
+
+-- Optional: Initialize with IDs instead of a folder
+local animaWithIds = Anima.new({
+    Idle = 12345678,
+    Walk = 87654321,
+}, game.Players.LocalPlayer)
 ```
 
 ---
@@ -131,6 +139,7 @@ The `examples/` folder contains focused scripts for specific use cases:
 4. **Locomotion Blending**: Smoothly handling movement speed transitions.
 5. **Composition**: Using states and blending together.
 6. **Overlays**: Layering actions (like punching) over movement using priorities.
+7. **NPC Support**: Operating Anima on non-player characters.
 
 ---
 
@@ -164,7 +173,10 @@ type State = {
 
 **Initialization**
 
-- `Anima.new(folder, player, debug?, disableAnimate?)` -> `Anima`
+- `Anima.new(source, subject, debug?, disableAnimate?)` -> `Anima`
+  - `source` can be a **Folder** or a **Table** (`{[string]: number | string}`).
+  - `subject` can be a **Player** or a **Model** (NPC).
+  - If a Player is provided, it returns a singleton instance.
 - `:LoadAnimations()` - Manually re-scan the animation folder.
 - `:Cache()` - Reloads character animator and tracks (call this on respawn).
 - `:WatchForChanges()` - Enables live-reloading of animations during development.
@@ -175,6 +187,8 @@ type State = {
 - `:StopAnimation(name, fadeTime?)` -> `boolean`
 - `:PauseAnimation(name)` / `:ResumeAnimation(name)`
 - `:PlayLooped(name, loopCount?)`
+- `:SetAnimation(name, id)` - Dynamically set or replace an animation using an ID or Instance.
+- `:SetAnimationSpeed(name, speed)` - Persistently sets the playback speed for an animation.
 - `:SetWeight(name, weight, fadeTime?)`
 - `:FadeAllOut(fadeTime?)`
 
@@ -199,7 +213,8 @@ type State = {
 
 **Lifecycle**
 
-- `:getPlaySignal()` / `:getStopSignal()` - Returns RBXScriptSignals.
+- `:getPlaySignal()` / `:getStopSignal()` - Returns custom Signal objects.
+  - Listeners receive: `(animationName: string, player: Player?, character: Model)`
 - `:setAnimationCallbacks(name, callbacks)` - Hook into state changes or markers.
 - `:Destroy()` - Clean up all tracks and event connections.
 

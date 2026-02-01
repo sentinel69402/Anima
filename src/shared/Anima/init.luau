@@ -11,9 +11,11 @@ local handler = {}
 handler.__index = handler
         
 local ContentProvider = game:GetService("ContentProvider")
+local Players = game:GetService("Players")
 local StateMachine = require(script.StateMachine)
 local Types = require(script.Types)
 local BlendController = require(script.BlendController)
+local SignalU = require(script.SignalU)
         
 export type Anima = typeof(setmetatable({} :: any, handler))
 export type config = {fadeTime: number?,weight: number?,priority: Enum.AnimationPriority?,stopOthers: boolean?,loop: boolean?}
@@ -22,7 +24,8 @@ type AnimationData = {
     track: AnimationTrack?,
     id: number,
     instance: Animation,
-    markerConnections: {RBXScriptConnection}?
+    markerConnections: {RBXScriptConnection}?,
+    speed: number
 }
 
 local weakValuesMeta = {__mode = "v"}
@@ -35,37 +38,73 @@ local function debugPrint(...)
     end
 end
 
+local registry = {}
+
 --[[
 Creates a new AnimationHandler instance
-@param animationsFolder Folder The folder containing Animation objects
-@param player Player The player whose animations will be managed
+@param animationsSource Folder | {[string]: number | string} The folder or table containing Animation objects/IDs
+@param subject Player | Model The player or NPC model whose animations will be managed
 @param debugMode boolean? Optional debug mode flag
 @param disableAnimate boolean? Disables Roblox's Animate script. Useful when using the state machine
 @return Anima
 ```lua
 local anima = Anima.new(workspace.Animations, game.Players.Player1, true, false)
+-- OR
+local anima = Anima.new({
+    Idle = 123456789,
+    Walk = "rbxassetid://987654321"
+}, game.Players.LocalPlayer)
 ```
 ]]
-function handler.new(animationsFolder: Folder, player: Player, debugMode: boolean?, disableAnimate: boolean?)
-    if typeof(animationsFolder) ~= "Instance" or not animationsFolder:IsA("Folder") then
-        error("Argument 1 must be a folder",2)
+function handler.new(animationsSource: Folder | {[string]: number | string}, subject: Player | Model, debugMode: boolean?, disableAnimate: boolean?)
+    if typeof(animationsSource) ~= "Instance" and typeof(animationsSource) ~= "table" then
+        error("Argument 1 must be a Folder or a table", 2)
     end
-    if typeof(player) ~= "Instance" or not player:IsA("Player") then
-        error("Argument 2 must be a player",2)
-    end
-    DEBUG = debugMode or false
-    debugPrint("Init Anima for player ",player.Name)
     
+    if typeof(animationsSource) == "Instance" and not animationsSource:IsA("Folder") then
+        error("Argument 1 must be a Folder (if instance provided)", 2)
+    end
+    
+    if typeof(subject) == "Instance" and subject:IsA("Player") then
+        if registry[subject] then
+            return registry[subject]
+        end
+    end
+
     local self = setmetatable({}, handler)
-    self.player = player
-    self.character = player.Character or player.CharacterAdded:Wait()
-    self.animator = self.character:FindFirstChildOfClass("Humanoid"):FindFirstChildOfClass("Animator")
-    self.animationsFolder = animationsFolder
+
+    if typeof(subject) == "Instance" and subject:IsA("Player") then
+        self.player = subject
+        self.character = subject.Character or subject.CharacterAdded:Wait()
+    elseif typeof(subject) == "Instance" and subject:IsA("Model") then
+        self.player = nil
+        self.character = subject
+    else
+        error("Argument 2 must be a Player or a Model", 2)
+    end
+
+    registry[subject] = self
+
+    DEBUG = debugMode or false
+    debugPrint("Init Anima for: ", self.character.Name)
+
+    local humanoid = self.character:FindFirstChildOfClass("Humanoid") or self.character:FindFirstChildOfClass("AnimationController")
+
+    if not humanoid then
+        error("Anima requires a Humanoid or AnimationController inside the Model", 2)
+    end
+
+    self.animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator",humanoid)
+    self.animationsSource = animationsSource
+    self.animationsFolder = if typeof(animationsSource) == "Instance" then animationsSource else nil
+    self._manualAnimations = {}
     self.animations = {}
+    self.animationSpeeds = {}
     self.animationTracks = {}
     self._connections = {}
-    self._onPlay = Instance.new("BindableEvent")
-    self._onStop = Instance.new("BindableEvent")
+    self.Signals = {}
+    self.Signals._onPlay = SignalU()
+    self.Signals._onStop = SignalU()
     self._onMissingAnimation = nil
     
     
@@ -86,14 +125,35 @@ function handler.new(animationsFolder: Folder, player: Player, debugMode: boolea
         tracksReused = 0,
         cacheOperations = 0,
     }
-    
-    self._connections[#self._connections + 1] = self.player.CharacterAdded:Connect(function()
-        self.character = self.player.Character
-        self.animator = nil
-        task.wait(0.1)
-        self:LoadAnimations()
-        self:Cache()
-    end)
+
+
+    if self.player then
+        local conn
+        conn = Players.PlayerRemoving:Connect(function(p)
+            if p == self.player then
+                registry[p] = nil
+                self:Destroy()
+                conn:Disconnect()
+            end
+        end)
+        
+        self._connections[#self._connections + 1] = self.player.CharacterAdded:Connect(function()
+            self.character = self.player.Character
+            self.animator = nil
+            task.wait(0.1)
+            self:LoadAnimations()
+            self:Cache()
+        end)
+    end
+
+    if not self.player then
+        self.character.AncestryChanged:Connect(function(_, parent)
+            if not parent then
+                self:Destroy()
+            end
+        end)
+    end
+
 
     self._blendControllers = {} :: {[string]: Types.BlendController}
 
@@ -103,12 +163,13 @@ function handler.new(animationsFolder: Folder, player: Player, debugMode: boolea
         animate.Disabled = true
     end
 
-    if #animationsFolder:GetChildren() == 0 then
-        warn(`Anima: animationsFolder is empty for player: {player.Name}`)
-    else
-        self:LoadAnimations()
-        self:Cache()
+    if self.animationsFolder and #self.animationsFolder:GetChildren() == 0 then
+        warn(`Anima: animationsFolder is empty for: {self.character.Name}`)
     end
+
+    self:LoadAnimations()
+    self:Cache()
+
     return self
 end
 
@@ -297,14 +358,14 @@ function handler:playGroup(groupName: string,config: config?)
         result[animName] = track
         
         if track then
-            local finished = Instance.new("BindableEvent")
+            local finished = SignalU()
             
             local connection
             connection = track.Stopped:Connect(function()
                 finished:Fire()
                 connection:Disconnect()
             end)
-            finished.Event:Wait()
+            finished:Wait()
         else
             warn(`Animation "{animName}" failed to play in group {groupName}`)
         end
@@ -427,7 +488,7 @@ function handler:_getTrack(name: string): AnimationTrack?
 
     local animator: Animator = self.animator
     if not animator then
-        local humanoid = self.character:FindFirstChildOfClass("Humanoid")
+        local humanoid = self.character:FindFirstChildOfClass("Humanoid") or self.character:FindFirstChildOfClass("AnimationController")
         if humanoid then
             animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
             self.animator = animator
@@ -445,19 +506,19 @@ function handler:setMissingAnimCallback(fn: (string) -> ())
 end
 
 --[[
-Returns the RBXScriptSignal fired when an animation starts playing
-@return RBXScriptSignal
+Returns the signal fired when an animation starts playing
+@return Signal
 ]]
-function handler:getPlaySignal(): RBXScriptSignal
-    return self._onPlay.Event
+function handler:getPlaySignal(): SignalU.Signal
+    return self.Signals._onPlay
 end
 
 --[[
-Returns the RBXScriptSignal fired when an animation stops playing
-@return RBXScriptSignal
+Returns the signal fired when an animation stops playing
+@return Signal
 ]]
-function handler:getStopSignal(): RBXScriptSignal
-    return self._onStop.Event
+function handler:getStopSignal(): SignalU.Signal
+    return self.Signals._onStop
 end
 
 --[[
@@ -512,10 +573,6 @@ end
 Loads animations from the assigned animations folder into the handler's cache
 ]]
 function handler:LoadAnimations()
-    if not self.animationsFolder then
-        warn("LoadAnimations called with no animationsFolder")
-    end
-
     local start = os.clock()
     if not self.animations then
         self.animations = {}
@@ -523,13 +580,25 @@ function handler:LoadAnimations()
         table.clear(self.animations)
     end
 
-    for _, animation in (self.animationsFolder:GetChildren()) do
-        if animation:IsA("Animation") then
-            self.animations[animation.Name] = animation
-            if DEBUG then
-                print("[LoadAnimations] Found animation:", animation.Name)
+    if self.animationsFolder then
+        for _, animation in (self.animationsFolder:GetChildren()) do
+            if animation:IsA("Animation") then
+                self.animations[animation.Name] = animation
+                if DEBUG then
+                    print("[LoadAnimations] Found animation in folder:", animation.Name)
+                end
             end
         end
+    end
+
+    if typeof(self.animationsSource) == "table" then
+        for name, id in (self.animationsSource) do
+            self:SetAnimation(name, id, true) -- true = skip LoadAnimations/Cache recursion
+        end
+    end
+
+    for name, anim in (self._manualAnimations) do
+        self.animations[name] = anim
     end
 
 	local assetsToPreload = {}
@@ -551,6 +620,10 @@ function handler:LoadAnimations()
 			debugPrint("Preloaded", #assetsToPreload, "animations")
 		end
 	end
+
+    for name in (self.animations) do
+        self.animationSpeeds[name] = self.animationSpeeds[name] or 1
+    end
     
     self:_updateAnimationSnapshot()
     
@@ -569,9 +642,9 @@ function handler:Cache()
         return 
     end
 
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local humanoid = character:FindFirstChildOfClass("Humanoid") or character:FindFirstChildOfClass("AnimationController")
     if not humanoid then
-        warn("Humanoid not found in character")
+        warn("Humanoid or AnimationController not found in character")
         return 
     end
 
@@ -618,100 +691,7 @@ function handler:Cache()
     end
 
     for name, animation in (self.animations) do
-        if not animation or not animation.AnimationId or animation.AnimationId == "" then
-            warn("Animation object is invalid for:", name)
-            failed += 1
-            continue
-        end
-
-        local freshAnimation = Instance.new("Animation")
-        freshAnimation.AnimationId = animation.AnimationId
-        freshAnimation.Name = animation.Name or name
-
-        local loadSuccess, track = pcall(function()
-            return animator:LoadAnimation(freshAnimation)
-        end)
-
-        if not loadSuccess or not track then
-            warn("Failed to load animation:", name)
-            failed += 1
-            continue
-        end
-
-        created += 1
-
-        local markerConnections = {}
-        local markerCallbackMap = self._animationCallbacks
-            and self._animationCallbacks[name]
-            and self._animationCallbacks[name].onMarker
-
-        if markerCallbackMap then
-            local hasGetMarkerSignal = false
-            pcall(function()
-                hasGetMarkerSignal = typeof(track.GetMarkerReachedSignal) == "function"
-            end)
-
-            if hasGetMarkerSignal then
-                for markerName, callback in (markerCallbackMap) do
-                    if typeof(callback) == "function" then
-                        local success, signal = pcall(function()
-                            return track:GetMarkerReachedSignal(markerName)
-                        end)
-
-                        if success and signal and typeof(signal) == "RBXScriptSignal" then
-                            local conn = signal:Connect(function()
-                                local callSuccess, err = pcall(callback, markerName)
-                                if not callSuccess then
-                                    warn("Error in marker callback for", name, markerName, ":", err)
-                                end
-                            end)
-                            table.insert(markerConnections, conn)
-                            print("Connected marker:", markerName, "for animation:", name)
-                        else
-                            warn("Failed to get signal for marker:", markerName, "in animation:", name)
-                        end
-                    end
-                end
-
-                if #markerConnections > 0 then
-                    print("Connected to", #markerConnections, "markers for:", name)
-                else
-                    warn("No valid markers connected for:", name)
-                end
-            else
-                local markerSuccess, conn = pcall(function()
-                    return track.KeyframeReached:Connect(function(keyframeName)
-                        local callback = markerCallbackMap[keyframeName]
-                        if callback and typeof(callback) == "function" then
-                            local callSuccess, err = pcall(callback, keyframeName)
-                            if not callSuccess then
-                                warn("Error in keyframe callback for", name, keyframeName, ":", err)
-                            end
-                        end
-                    end)
-                end)
-
-                if markerSuccess and conn then
-                    table.insert(markerConnections, conn)
-                    print("Using KeyframeReached fallback for:", name)
-                else
-                    warn("No marker or keyframe API available for:", name)
-                end
-            end
-        end
-
-        pcall(function()
-            track.Priority = Enum.AnimationPriority.Action
-        end)
-
-        self.animationTracks[name] = {
-            track = track,
-            priority = Enum.AnimationPriority.Action,
-            weight = 1,
-            lastUsed = os.clock(),
-            markerConnections = markerConnections,
-            animation = freshAnimation, 
-        }
+        self:_cacheSingle(name, animation)
     end
 
     if not self._stats then
@@ -733,18 +713,21 @@ end
 
 function handler:_updateAnimationSnapshot()
     self._lastAnimationSnapshot = {}
-    for _, child in (self.animationsFolder:GetChildren()) do
-        if child:IsA("Animation") then
-            self._lastAnimationSnapshot[child.Name] = {
-                name = child.Name,
-                id = child.AnimationId,
-                instance = child
-            }
+    if self.animationsFolder then
+        for _, child in (self.animationsFolder:GetChildren()) do
+            if child:IsA("Animation") then
+                self._lastAnimationSnapshot[child.Name] = {
+                    name = child.Name,
+                    id = child.AnimationId,
+                    instance = child
+                }
+            end
         end
     end
 end
 
 function handler:_hasAnimationChanges(): boolean
+    if not self.animationsFolder then return false end
     local currentAnimations = {}
     
     for _,child in (self.animationsFolder:GetChildren()) do
@@ -980,7 +963,7 @@ function handler:PlayAnimation(name: string, config: config?)
         freshAnimation.AnimationId = anim.AnimationId
         freshAnimation.Name = anim.Name or name
 
-        track = animator:LoadAnimation(freshAnimation)
+        track = animator:LoadAnimation(freshAnimation) :: AnimationTrack
         if not track then
             warn(`[PlayAnimation] Failed to load animation track for "{name}"`)
             return nil
@@ -991,6 +974,7 @@ function handler:PlayAnimation(name: string, config: config?)
             lastUsed = os.clock(),
             priority = Enum.AnimationPriority.Action,
             weight = 1,
+            speed = 1,
             markerConnections = {},
             animation = freshAnimation,
         }
@@ -1009,18 +993,20 @@ function handler:PlayAnimation(name: string, config: config?)
     local priority = config and config.priority or (cachedData and cachedData.priority or Enum.AnimationPriority.Action)
     local stopOthers = if config ~= nil then config.stopOthers else true
     local loop = config and config.loop or false
+    local targetSpeed = self.animationSpeeds[name] or 1
 
-    track.Priority = priority
-    track.Looped = loop
-    track:Play(fadeTime)
-    track:AdjustWeight(weight, fadeTime)
+    track.Priority = priority	
+    track.Looped = loop	
+    track:Play(fadeTime)	
+    track:AdjustWeight(weight, fadeTime)	
+    track:AdjustSpeed(targetSpeed)
 
     local cb = self._animationCallbacks[name]
     if cb and cb.onPlay then
         pcall(cb.onPlay)
     end
 
-    self._onPlay:Fire(name, self.player)
+    self.Signals._onPlay:Fire(name, self.player, self.character)
 
     if stopOthers then
         local animator = self.animator
@@ -1046,7 +1032,7 @@ Stops the specified animation if playing, with optional fade out
 function handler:StopAnimation(animationName: string, fadeTime: number?): boolean
     local track = self:GetAnimationTrack(animationName)
     if not track then
-        warn(`no animation track found for {animationName} on player {self.player.Name}`)
+        warn(`no animation track found for {animationName} on {self.character.Name}`)
         return false
     end
 
@@ -1060,12 +1046,29 @@ function handler:StopAnimation(animationName: string, fadeTime: number?): boolea
                 cb.onStop()
             end
             conn:Disconnect()
-            self._onStop:Fire(animationName, self.player)
+            self.Signals._onStop:Fire(animationName, self.player, self.character)
         end)
         track:Stop(fadingTime)
         return true
     end
     return false
+end
+
+function handler:Sync(data: { [Instance]: {string} })
+    local registry = self:GetRegistry()
+
+    for subject, animationList in (data) do
+        local handler = registry[subject]
+
+        if not handler then
+            warn(`Sync: No Anima handler found for {subject.Name}`)
+            continue
+        end
+
+        for _, animName in (animationList) do
+            handler:PlayAnimation(animName)
+        end
+    end
 end
 
 --[[
@@ -1085,8 +1088,141 @@ Resumes playback of the specified paused animation by restoring speed to 1
 ]]
 function handler:ResumeAnimation(animationName: string)
     local data = self.animationTracks[animationName]
-    if data and data.track.IsPlaying then
-        data.track:AdjustSpeed(1)
+    
+    if data and data.track then
+        local speed = self.animationSpeeds[animationName] or 1
+        data.track:AdjustSpeed(speed)
+    end
+end
+
+--[[
+Manually sets or replaces an animation in the Anima handler.
+@param name string The name of the animation
+@param id number | string | Animation The animation ID or instance
+@param _skipUpdate boolean? Internal flag to skip track re-caching
+]]
+function handler:SetAnimation(name: string, id: number | string | Animation, _skipUpdate: boolean?)
+    local animInstance
+    if typeof(id) == "Instance" and id:IsA("Animation") then
+        animInstance = id
+    else
+        animInstance = Instance.new("Animation")
+        animInstance.Name = name
+        local idStr = tostring(id)
+        animInstance.AnimationId = if idStr:sub(1, 13) == "rbxassetid://" then idStr else "rbxassetid://" .. idStr
+    end
+    
+    self._manualAnimations[name] = animInstance
+    
+    if not _skipUpdate then
+        self.animations[name] = animInstance
+        self:_cacheSingle(name, animInstance)
+    end
+end
+
+--[[
+Internal helper to cache a single animation track without a full reload.
+]]
+function handler:_cacheSingle(name: string, animation: Animation)
+    if not self.animator then return end
+    
+    local oldData = self.animationTracks[name]
+    if oldData and oldData.track then
+        pcall(function() oldData.track:Stop() end)
+        if oldData.markerConnections then
+            for _, conn in (oldData.markerConnections) do
+                pcall(function() conn:Disconnect() end)
+            end
+        end
+        pcall(function() oldData.track:Destroy() end)
+    end
+
+    if not animation or not animation.AnimationId or animation.AnimationId == "" then
+        return
+    end
+
+    local freshAnimation = Instance.new("Animation")
+    freshAnimation.AnimationId = animation.AnimationId
+    freshAnimation.Name = animation.Name or name
+
+    local loadSuccess, track = pcall(function()
+        return self.animator:LoadAnimation(freshAnimation)
+    end)
+
+    if not loadSuccess or not track then
+        warn("Failed to load animation:", name)
+        return
+    end
+
+    local markerConnections = {}
+    local markerCallbackMap = self._animationCallbacks
+        and self._animationCallbacks[name]
+        and self._animationCallbacks[name].onMarker
+
+    if markerCallbackMap then
+        local hasGetMarkerSignal = false
+        pcall(function()
+            hasGetMarkerSignal = typeof(track.GetMarkerReachedSignal) == "function"
+        end)
+
+        if hasGetMarkerSignal then
+            for markerName, callback in (markerCallbackMap) do
+                if typeof(callback) == "function" then
+                    local success, signal = pcall(function()
+                        return track:GetMarkerReachedSignal(markerName)
+                    end)
+
+                    if success and signal and typeof(signal) == "RBXScriptSignal" then
+                        local conn = signal:Connect(function()
+                            local callSuccess, err = pcall(callback, markerName)
+                            if not callSuccess then
+                                warn("Error in marker callback for", name, markerName, ":", err)
+                            end
+                        end)
+                        table.insert(markerConnections, conn)
+                    end
+                end
+            end
+        else
+            pcall(function()
+                local conn = track.KeyframeReached:Connect(function(keyframeName)
+                    local callback = markerCallbackMap[keyframeName]
+                    if callback and typeof(callback) == "function" then
+                        pcall(callback, keyframeName)
+                    end
+                end)
+                table.insert(markerConnections, conn)
+            end)
+        end
+    end
+
+    pcall(function()
+        track.Priority = Enum.AnimationPriority.Action
+    end)
+
+    self.animationTracks[name] = {
+        track = track,
+        priority = Enum.AnimationPriority.Action,
+        weight = 1,
+        speed = 1,
+        lastUsed = os.clock(),
+        markerConnections = markerConnections,
+        animation = freshAnimation, 
+    }
+end
+
+--[[
+Sets the playback speed for a specific animation
+@param name Animation name
+@param speed Speed multiplier (1 is normal speed)
+]]
+function handler:SetAnimationSpeed(name: string, speed: number)
+    self.animationSpeeds[name] = speed
+
+    local data = self.animationTracks[name]
+
+    if data and data.track then
+        data.track:AdjustSpeed(speed)
     end
 end
 
@@ -1136,7 +1272,7 @@ Schedules automatic stopping of all animations and cleanup after delayTime secon
 ]]
 function handler:AutoExpire(delayTime: number)
     task.delay(delayTime, function()
-        if not self.player then
+        if self._destroyed or not self.character or not self.character.Parent then
             return
         end
         for _, data in self.animationTracks do
@@ -1161,13 +1297,14 @@ function handler:FadeAllOut(fadeTime: number)
 end
 
 --[[
-Subscribes to an external BindableEvent to trigger reload of animations and cache
-@param bindable BindableEvent instance to listen to
+Subscribes to an external signal or BindableEvent to trigger reload of animations and cache
+@param signal Signal or BindableEvent instance to listen to
 ]]
-function handler:HotReload(bindable: BindableEvent)
+function handler:HotReload<T...>(signal: BindableEvent | Types.Signal<T...>)
+    local event = if typeof(signal) == "Instance" and signal:IsA("BindableEvent") then signal.Event else signal
     table.insert(
         self._connections,
-        bindable.Event:Connect(function()
+        (event :: any):Connect(function()
             self:LoadAnimations()
             self:Cache()
         end)
@@ -1242,8 +1379,8 @@ Adds a custom event callback triggered at a specific marker time in the animatio
 function handler:addAnimationEvent(animationName: string, time: number, callback: () -> ())
     local track = self:GetAnimationTrack(animationName)
     if track then
-        local event = Instance.new("BindableEvent")
-        event.Event:Connect(callback)
+        local event = SignalU()
+        event:Connect(callback)
         track:GetMarkerReachedSignal(tostring(time)):Connect(function()
             event:Fire()
         end)
@@ -1298,6 +1435,14 @@ function handler:UpdateBlend(name: string, value: number)
 end
 
 --[[
+    @return registry
+    USE ONLY FOR DEBUG
+]]
+function handler:GetRegistry()
+    return registry
+end
+
+--[[
 Cleans up all event connections, internal state, and releases resources
 ]]
 function handler:Destroy()
@@ -1310,12 +1455,9 @@ function handler:Destroy()
     for _, controller: Types.BlendController in (self._blendControllers) do
         controller:Destroy()
     end
-    
-    if self._onPlay then
-        pcall(function() self._onPlay:Destroy() end)
-    end
-    if self._onStop then
-        pcall(function() self._onStop:Destroy() end)
+
+    for _, sig in (self.Signals) do
+        sig:Destroy()
     end
     
     if self._trackPool then
@@ -1338,6 +1480,11 @@ function handler:Destroy()
     self.animations = nil
     self.animationTracks = nil
     self._trackPool = nil
+    local key = self.player or self.character
+    if key then
+        registry[key] = nil
+    end
+
     self.player = nil
     self.animationsFolder = nil
     self._connections = nil

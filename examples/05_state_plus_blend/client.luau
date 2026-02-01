@@ -87,6 +87,12 @@ RunService.Heartbeat:Connect(function()
         -- Update blend weights based on speed when on the ground
         local speed = humanoid.MoveDirection.Magnitude * humanoid.WalkSpeed
         anima:UpdateBlend("Locomotion", speed)
+
+        -- Example: Dynamically scale animation speed based on character movement
+        -- If base run speed is 16, moving at 24 will result in 1.5x animation speed
+        if speed > 0 then
+            anima:SetAnimationSpeed("Run", speed / 16)
+        end
     else
         -- Force Idle weight (0 speed) when not in locomotion state
         anima:UpdateBlend("Locomotion", 0)
