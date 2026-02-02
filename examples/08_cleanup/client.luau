@@ -10,15 +10,12 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local Anima = require(ReplicatedStorage.Shared.Anima)
 
 --[[
     Get local dependencies and character references
 ]]
 local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid") :: Humanoid
 local anims = ReplicatedStorage:WaitForChild("Anims")
 
 --[[
