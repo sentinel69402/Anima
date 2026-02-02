@@ -1488,7 +1488,11 @@ function handler:Destroy()
     self.player = nil
     self.animationsFolder = nil
     self._connections = nil
-    self._blendControllers = {}
+	self._blendControllers = {}
+
+	setmetatable(self, nil)
+	table.clear(self)
+	table.freeze(self)
 end
 
 return handler

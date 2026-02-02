@@ -119,11 +119,23 @@ end
     Cleans up the BlendController and stops its animations
 ]]
 function BlendController:Destroy()
-    self._alive = false
+	self._alive = false
 
     for _, node in (self._nodes) do
-        self._handler:SetWeight(node.name,0)
-    end
+		self._handler:SetWeight(node.name,0)
+		table.clear(node)
+	end
+	
+	for _, node in (self._sortedNodes) do
+		table.clear(node)
+	end
+
+	table.clear(self._nodes)
+	table.clear(self._sortedNodes)
+	
+	setmetatable(self, nil)
+	table.clear(self)
+	table.freeze(self)
 end
 
 return BlendController

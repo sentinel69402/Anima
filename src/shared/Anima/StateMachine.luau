@@ -118,18 +118,27 @@ function StateMachine:Update()
 end
 
 --[[
-Cleans up the StateMachine
+Destroys/cleans up the state machine
 ]]
 function StateMachine:Destroy()
-    local currentState = self._states[self._current]
-    if currentState and currentState.onExit then
-        pcall(function() currentState.onExit() end
-    end
+	local currentState = self._states[self._current]
+	if currentState and currentState.onExit then
+		pcall(function() currentState.onExit() end)
+	end
+	
+	for _, state in (self._states) do
+		if state.transitions then
+			table.clear(state.transitions)
+		end
+		table.clear(state)
+	end
 
-    self._states = nil
-    self._Context = nil
+	table.clear(self.Context)
+	table.clear(self._states)
 
-    setmetatable(self,nil)
+	setmetatable(self, nil)
+	table.clear(self)
+	table.freeze(self)
 end
 
 return StateMachine
