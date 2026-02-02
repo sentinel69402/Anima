@@ -117,4 +117,19 @@ function StateMachine:Update()
     end
 end
 
+--[[
+Cleans up the StateMachine
+]]
+function StateMachine:Destroy()
+    local currentState = self._states[self._current]
+    if currentState and currentState.onExit then
+        pcall(function() currentState.onExit() end
+    end
+
+    self._states = nil
+    self._Context = {}
+
+    setmetatable(self,nil)
+end
+
 return StateMachine
