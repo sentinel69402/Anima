@@ -127,7 +127,7 @@ function StateMachine:Destroy()
     end
 
     self._states = nil
-    self._Context = {}
+    self._Context = nil
 
     setmetatable(self,nil)
 end
